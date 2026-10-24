@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Building the Newton polytope</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --page:#FFFFFF; --panel:#D2F4FB; --ink:#0D515F; --muted:#5C7F87; --axis:#7F9499;
+  --accent:#D13400; --accent-ink:#790800; --hard:#5CD5F2; --hard-deep:#2696B3;
+  --btn:#FFFFFF; --btn-border:#9FD9E6;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --page:#0A2229; --panel:#103540; --ink:#D6F3F9; --muted:#8FB4BC; --axis:#7C9CA4;
+    --accent:#FF6A3D; --accent-ink:#FFB39C; --hard:#5CD5F2; --hard-deep:#3FB4D3;
+    --btn:#0D2C35; --btn-border:#2E6170;
+  }
+}
+:root[data-theme="dark"]{
+  --page:#0A2229; --panel:#103540; --ink:#D6F3F9; --muted:#8FB4BC; --axis:#7C9CA4;
+  --accent:#FF6A3D; --accent-ink:#FFB39C; --hard:#5CD5F2; --hard-deep:#3FB4D3;
+  --btn:#0D2C35; --btn-border:#2E6170;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{height:100%}
+body{margin:0;min-height:100%;background:var(--page);color:var(--ink);
+  font-family:'IBM Plex Sans','Helvetica Neue',Arial,sans-serif;}
+main{max-width:980px;margin:0 auto;padding:28px 20px 36px;display:flex;flex-direction:column;gap:18px}
+h1{margin:0;font-size:clamp(24px,4vw,34px);font-weight:600;letter-spacing:-0.01em;line-height:1.15}
+.sub{margin:6px 0 0;font-size:17px;color:var(--muted);line-height:1.45;max-width:62ch}
+.sub i{font-style:italic}
+.stage{background:var(--panel);border-radius:24px;padding:10px;position:relative;touch-action:none;cursor:grab;user-select:none}
+.stage:active{cursor:grabbing}
+svg{display:block;width:100%;height:auto}
+.hint{position:absolute;right:18px;top:14px;font-size:13px;color:var(--muted)}
+.caption{display:flex;gap:16px;align-items:baseline;min-height:4.2em}
+.count{flex-shrink:0;font-size:14px;font-weight:600;color:var(--accent-ink);padding-top:3px;min-width:4.6em}
+.text{margin:0;font-size:19px;line-height:1.5;max-width:66ch}
+.text b{font-weight:600}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button{font:inherit;font-size:15px;font-weight:500;color:var(--ink);background:var(--btn);
+  border:2px solid var(--btn-border);border-radius:12px;padding:8px 16px;cursor:pointer}
+button:hover{border-color:var(--ink)}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--ink);color:var(--page);border-color:var(--ink);min-width:6.5em}
+.progress{flex:1;min-width:120px;height:6px;border-radius:3px;background:var(--panel);overflow:hidden}
+.progress>div{height:100%;background:var(--accent);width:0;transition:width .3s}
+@media (prefers-reduced-motion: reduce){.progress>div{transition:none}}
+.foot{margin:8px 0 0;font-size:14px;line-height:1.5;color:var(--muted)}
+.foot a{color:var(--accent-ink);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Building the Newton polytope</h1>
+<p class="sub">One-loop triangle with U = 1 + x₂ + x₃ and F = x₃ + λx₂x₃ (x₁ set to 1). Every monomial of U·F becomes a point.</p>
+</header>
+<div class="stage" id="stage">
+<span class="hint">drag to rotate</span>
+<svg id="svg" viewBox="0 0 900 600" role="img" aria-labelledby="cap"></svg>
+</div>
+<div class="caption" aria-live="polite">
+<div class="count" id="count"></div>
+<p class="text" id="cap"></p>
+</div>
+<div class="controls">
+<button id="back" aria-label="Previous step">Back</button>
+<button id="play" class="primary">Play</button>
+<button id="next" aria-label="Next step">Next</button>
+<button id="restart">Start over</button>
+<div class="progress" aria-hidden="true"><div id="bar"></div></div>
+</div>
+<p class="foot">Prefer a video? <a href="newton-polytope-assembly.mp4">Watch it here</a> (36 s).<br>
+From the poster <i>A Regional Study of Deep Inelastic Scattering</i>, Kata Benedek, Higgs Centre for Theoretical Physics, University of Edinburgh.</p>
+</main>
+<script>
+(function(){
+const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// points in (e2, e3, e_lambda)
+const P = {
+  x3:[0,1,0], x3s:[0,2,0], x2x3:[1,1,0],
+  lx2x3:[1,1,1], lx2x3s:[1,2,1], lx22x3:[2,1,1]
+};
+const LABEL = {x3:'x₃', x3s:'x₃²', x2x3:'x₂x₃', lx2x3:'λx₂x₃', lx2x3s:'λx₂x₃²', lx22x3:'λx₂²x₃'};
+const ORDER = ['x3','x3s','x2x3','lx2x3','lx2x3s','lx22x3'];
+const FACES = [
+  {id:'hard', v:['x3','x3s','x2x3'], n:[0,0,-1]},
+  {id:'coll', v:['x3s','x2x3','lx22x3','lx2x3s'], n:[1,1,-1]},
+  {id:'back', v:['x3','x3s','lx2x3s','lx2x3'], n:[-1,0,1]},
+  {id:'wall', v:['x3','x2x3','lx22x3','lx2x3'], n:[0,-1,0]},
+  {id:'top',  v:['lx2x3','lx2x3s','lx22x3'], n:[0,0,1]}
+];
+const EDGES = [];
+FACES.forEach(f=>f.v.forEach((a,i)=>{const b=f.v[(i+1)%f.v.length];
+  const k=[a,b].sort().join('|'); let e=EDGES.find(x=>x.k===k);
+  if(!e){e={k,a,b,faces:[]};EDGES.push(e);} e.faces.push(f.id);}));
+
+const STEPS = [
+ {t:'An empty exponent space. A monomial x₂<sup>a</sup> x₃<sup>b</sup> λ<sup>c</sup> will sit at the point (a, b, c).'},
+ {pt:'x3',   t:'<b>1 · x₃ = x₃</b> &nbsp;→&nbsp; (0, 1, 0)'},
+ {pt:'x3s',  t:'<b>x₃ · x₃ = x₃²</b> &nbsp;→&nbsp; (0, 2, 0)'},
+ {pt:'x2x3', t:'<b>x₂ · x₃ = x₂x₃</b> &nbsp;→&nbsp; (1, 1, 0)'},
+ {pt:'lx2x3',  t:'<b>1 · λx₂x₃ = λx₂x₃</b> &nbsp;→&nbsp; (1, 1, 1)'},
+ {pt:'lx2x3s', t:'<b>x₃ · λx₂x₃ = λx₂x₃²</b> &nbsp;→&nbsp; (1, 2, 1)'},
+ {pt:'lx22x3', t:'<b>x₂ · λx₂x₃ = λx₂²x₃</b> &nbsp;→&nbsp; (2, 1, 1). All six products of U and F are now placed.'},
+ {edges:true, t:'Join the outermost points. Their convex hull is the <b>Newton polytope</b>: six vertices, nine edges, five faces.'},
+ {faces:true, t:'Regions come from the <b>lower facets</b>: faces whose inward normal points up, towards larger λ.'},
+ {hard:true, t:'<b>Hard region:</b> the floor. Inward normal (0, 0, 1), so region vector (0, 0, 0; 1).'},
+ {coll:true, t:'<b>Collinear region:</b> the slanted face. Inward normal (−1, −1, 1), so region vector (0, −1, −1; 1).'},
+ {done:true, t:'The other three faces have normals pointing down or sideways, so they give no regions. Two facets, two regions.'}
+];
+// how long each step stays on screen while playing (ms)
+const STEP_MS = [1800, 1700,1700,1700,1700,1700,1900, 2600, 2100, 2600, 2600, 2600];
+const GUIDE_MS = 800, PT_DELAY = 650;
+
+// state
+let step = 0, playing = false, timer = null;
+let yaw = 50*Math.PI/180, pitch = 22*Math.PI/180;
+const shownAt = {}; // key -> timestamp
+const REC = new URLSearchParams(location.search).has('rec');
+const now = () => (window.__VT!==undefined ? window.__VT : performance.now());
+function mark(key){ if(!(key in shownAt)) shownAt[key] = reduce ? -1e9 : now(); }
+function prog(key, ms){ if(!(key in shownAt)) return 0; return Math.min(1,(now()-shownAt[key])/ms); }
+function ease(t){ return 1-Math.pow(1-t,3); }
+function ptProg(k){ const key='pt:'+k; if(!(key in shownAt)) return 0; return Math.max(0,Math.min(1,(now()-shownAt[key]-PT_DELAY)/450)); }
+
+function applyStep(s, animate){
+  step = Math.max(0, Math.min(STEPS.length-1, s));
+  // reset everything past this step
+  for(const k in shownAt) delete shownAt[k];
+  for(let i=1;i<=step;i++){
+    const st = STEPS[i]; const live = animate && i===step;
+    const put = k => { if(live) mark(k); else shownAt[k] = -1e9; };
+    if(st.pt) put('pt:'+st.pt);
+    if(st.edges) put('edges');
+    if(st.faces) put('faces');
+    if(st.hard) put('hard');
+    if(st.coll) put('coll');
+    if(st.done) put('done');
+  }
+  document.getElementById('cap').innerHTML = STEPS[step].t;
+  document.getElementById('count').textContent = 'Step '+(step+1)+' of '+STEPS.length;
+  document.getElementById('bar').style.width = (100*step/(STEPS.length-1))+'%';
+  document.getElementById('back').disabled = step===0;
+  document.getElementById('next').disabled = step===STEPS.length-1;
+}
+
+// projection
+function camera(){
+  const c=[Math.cos(pitch)*Math.cos(yaw), Math.cos(pitch)*Math.sin(yaw), Math.sin(pitch)];
+  const f=[-c[0],-c[1],-c[2]], u=[0,0,1];
+  let r=[f[1]*u[2]-f[2]*u[1], f[2]*u[0]-f[0]*u[2], f[0]*u[1]-f[1]*u[0]];
+  const rl=Math.hypot(...r); r=r.map(x=>x/rl);
+  const up=[r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+  return {c,r,up};
+}
+const CEN=[1.0,1.0,0.5], S=205, OX=450, OY=355;
+function proj(p,cam){
+  const q=[p[0]-CEN[0],p[1]-CEN[1],p[2]-CEN[2]];
+  const x=q[0]*cam.r[0]+q[1]*cam.r[1]+q[2]*cam.r[2];
+  const y=q[0]*cam.up[0]+q[1]*cam.up[1]+q[2]*cam.up[2];
+  return [OX - S*x, OY - S*y]; // mirrored x to match the poster figure
+}
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const f1=n=>n.toFixed(1);
+
+function arrowHead(A,B,color,size){
+  const dx=B[0]-A[0], dy=B[1]-A[1], L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L;
+  const bx=B[0]-ux*size, by=B[1]-uy*size, nx=-uy*size*0.45, ny=ux*size*0.45;
+  return `<path d="M ${f1(B[0])} ${f1(B[1])} L ${f1(bx+nx)} ${f1(by+ny)} L ${f1(bx-nx)} ${f1(by-ny)} Z" fill="${color}"/>`;
+}
+
+function render(){
+  const cam=camera(), ink=css('--ink'), axis=css('--axis'), acc=css('--accent'), accInk=css('--accent-ink'),
+        hard=css('--hard'), hardDeep=css('--hard-deep'), panel=css('--panel');
+  const o=[];
+  const O=proj([0,0,0],cam);
+  // axes
+  const AX=[['x₂',[2.5,0,0],[1,2]],['x₃',[0,2.5,0],[1,2]],['λ',[0,0,1.6],[1]]];
+  AX.forEach(([lab,end,ticks])=>{
+    const E=proj(end,cam);
+    o.push(`<path d="M ${f1(O[0])} ${f1(O[1])} L ${f1(E[0])} ${f1(E[1])}" stroke="${axis}" stroke-width="3" fill="none" stroke-linecap="round"/>`);
+    o.push(arrowHead(O,E,axis,16));
+    const dx=E[0]-O[0], dy=E[1]-O[1], L=Math.hypot(dx,dy)||1, nx=-dy/L, ny=dx/L;
+    ticks.forEach(t=>{const p=end.map(v=>v/Math.max(...end.map(Math.abs))*t);
+      const T=proj(p,cam);
+      o.push(`<path d="M ${f1(T[0]-nx*8)} ${f1(T[1]-ny*8)} L ${f1(T[0]+nx*8)} ${f1(T[1]+ny*8)}" stroke="${axis}" stroke-width="3"/>`);
+      o.push(`<text x="${f1(T[0]+nx*24)}" y="${f1(T[1]+ny*24+7)}" font-size="19" fill="${axis}" text-anchor="middle">${t}</text>`);});
+    o.push(`<text x="${f1(E[0]+dx/L*30)}" y="${f1(E[1]+dy/L*30+9)}" font-size="26" font-style="italic" fill="${axis}" text-anchor="middle">${lab}</text>`);
+  });
+  o.push(`<text x="${f1(O[0]-14)}" y="${f1(O[1]+20)}" font-size="19" fill="${axis}" text-anchor="middle">0</text>`);
+
+  // faces
+  const front = {}; FACES.forEach(f=>front[f.id]=dot(f.n,cam.c)>1e-9);
+  const pf = ease(prog('faces',600));
+  const ph = ease(prog('hard',700)), pc = ease(prog('coll',700));
+  const poly = f => f.v.map((k,i)=>{const s=proj(P[k],cam);return (i?'L ':'M ')+f1(s[0])+' '+f1(s[1]);}).join(' ')+' Z';
+  FACES.forEach(f=>{
+    if(f.id==='hard'||f.id==='coll') return;
+    if(pf>0) o.push(`<path d="${poly(f)}" fill="#FFFFFF" fill-opacity="${(0.28*pf).toFixed(3)}" stroke="none"/>`);
+  });
+  const coll=FACES[1], hardF=FACES[0];
+  if(pc>0) o.push(`<path d="${poly(coll)}" fill="${acc}" fill-opacity="${(0.38*pc).toFixed(3)}" stroke="none"/>`);
+  else if(pf>0) o.push(`<path d="${poly(coll)}" fill="#FFFFFF" fill-opacity="${(0.28*pf).toFixed(3)}" stroke="none"/>`);
+  if(ph>0) o.push(`<path d="${poly(hardF)}" fill="${front.hard?hard:hardDeep}" fill-opacity="${(0.8*ph).toFixed(3)}" stroke="none"/>`);
+  else if(pf>0) o.push(`<path d="${poly(hardF)}" fill="#FFFFFF" fill-opacity="${(0.28*pf).toFixed(3)}" stroke="none"/>`);
+
+  // helper lines: walk from the origin along x2, then x3, then up in lambda to the point
+  const edgesOn = ('edges' in shownAt);
+  ORDER.forEach(k=>{
+    if(edgesOn) return;
+    const key='pt:'+k; if(!(key in shownAt)) return;
+    const p=P[k], g=ease(prog(key,GUIDE_MS));
+    const current = STEPS[step].pt===k;
+    const pts=[[0,0,0],[p[0],0,0],[p[0],p[1],0],[p[0],p[1],p[2]]];
+    const segs=[]; for(let i=0;i<3;i++){ const a=pts[i], b=pts[i+1]; const L=Math.hypot(b[0]-a[0],b[1]-a[1],b[2]-a[2]); if(L>0) segs.push([a,b,L]); }
+    const tot=segs.reduce((s,x)=>s+x[2],0); let left=g*tot;
+    const col = current ? acc : axis, w = current ? 3.5 : 2.2, op = current ? 0.95 : 0.45;
+    segs.forEach(([a,b,L])=>{ if(left<=0) return; const f=Math.min(1,left/L); left-=L;
+      const A=proj(a,cam), B=proj([a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f],cam);
+      o.push(`<path d="M ${f1(A[0])} ${f1(A[1])} L ${f1(B[0])} ${f1(B[1])}" stroke="${col}" stroke-width="${w}" stroke-dasharray="7 6" stroke-linecap="round" fill="none" opacity="${op}"/>`);
+    });
+    if(current){
+      // small markers where the walk turns
+      let run=0;
+      segs.forEach(([a,b,L])=>{ run+=L; if(g*tot+1e-6<run) return;
+        const C=proj(b,cam);
+        o.push(`<circle cx="${f1(C[0])}" cy="${f1(C[1])}" r="5" fill="${acc}"/>`);
+      });
+    }
+  });
+  // vertical drops for lambda = 1 points (kept once the hull is drawn)
+  const dropFade = 1-ease(prog('faces',450));
+  ORDER.forEach(k=>{ const p=P[k]; const a=ptProg(k)*dropFade; if(a<=0||p[2]===0) return; if(!edgesOn && STEPS[step].pt===k) return;
+    const A=proj(p,cam), B=proj([p[0],p[1],0],cam);
+    o.push(`<path d="M ${f1(A[0])} ${f1(A[1])} L ${f1(B[0])} ${f1(B[1])}" stroke="${axis}" stroke-width="2" stroke-dasharray="6 6" opacity="${(0.8*a).toFixed(2)}"/>`);
+  });
+
+  // edges (staggered draw-in)
+  if('edges' in shownAt){
+    EDGES.forEach((e,i)=>{
+      const t = reduce ? 1 : Math.max(0,Math.min(1,(now()-shownAt.edges-i*110)/380));
+      if(t<=0) return;
+      const vis = e.faces.some(id=>front[id]);
+      const A=proj(P[e.a],cam), B0=proj(P[e.b],cam), B=[A[0]+(B0[0]-A[0])*ease(t), A[1]+(B0[1]-A[1])*ease(t)];
+      o.push(`<path d="M ${f1(A[0])} ${f1(A[1])} L ${f1(B[0])} ${f1(B[1])}" stroke="${ink}" fill="none" stroke-linecap="round" `+
+        (vis?`stroke-width="4.5"`:`stroke-width="3" stroke-dasharray="10 8" opacity="0.8"`)+`/>`);
+    });
+  }
+
+  // normals
+  function normal(key,cen,dir,label,color,txtColor,side){
+    const p=ease(prog(key,800)); if(p<=0) return;
+    const L=0.95*p, d=dir.map(v=>v/Math.hypot(...dir));
+    const A=proj(cen,cam), B=proj([cen[0]+d[0]*L,cen[1]+d[1]*L,cen[2]+d[2]*L],cam);
+    o.push(`<path d="M ${f1(A[0])} ${f1(A[1])} L ${f1(B[0])} ${f1(B[1])}" stroke="${color}" stroke-width="5" stroke-linecap="round"/>`);
+    o.push(arrowHead(A,B,color,18));
+    o.push(`<circle cx="${f1(A[0])}" cy="${f1(A[1])}" r="6" fill="${color}"/>`);
+    const right = side==='left' ? false : side==='right' ? true : B[0]>=A[0];
+    if(p>0.95) o.push(`<text x="${f1(B[0]+(right?14:-14))}" y="${f1(B[1]-12)}" font-size="22" font-weight="600" fill="${txtColor}" text-anchor="${right?'start':'end'}" paint-order="stroke" stroke="${panel}" stroke-width="7" stroke-linejoin="round">${label}</text>`);
+  }
+  if(step>=9)  normal('hard',[1/3,4/3,0],[0,0,1],'(0, 0, 0; 1)',hardDeep,ink,'left');
+  if(step>=10) normal('coll',[1,1.5,0.5],[-1,-1,1],'(0, −1, −1; 1)',acc,accInk);
+
+  // points and labels
+  const cs=ORDER.map(k=>proj(P[k],cam)), cx=cs.reduce((s,p)=>s+p[0],0)/6, cy=cs.reduce((s,p)=>s+p[1],0)/6;
+  ORDER.forEach(k=>{
+    const a=ptProg(k); if(a<=0) return;
+    const s=proj(P[k],cam), lam=P[k][2]>0, col=lam?accInk:ink, e=ease(a);
+    const pulse = (!reduce && a<1) ? 1+0.6*(1-e) : 1;
+    o.push(`<circle cx="${f1(s[0])}" cy="${f1(s[1])}" r="${f1(10*pulse)}" fill="${col}" opacity="${e.toFixed(2)}"/>`);
+    let dx=s[0]-cx, dy=s[1]-cy; const L=Math.hypot(dx,dy)||1; dx/=L; dy/=L;
+    o.push(`<text x="${f1(s[0]+dx*44)}" y="${f1(s[1]+dy*34+8)}" font-size="24" font-style="italic" font-weight="500" fill="${col}" text-anchor="middle" paint-order="stroke" stroke="${panel}" stroke-width="6" stroke-linejoin="round" opacity="${e.toFixed(2)}">${LABEL[k]}</text>`);
+  });
+
+  document.getElementById('svg').innerHTML=o.join('');
+}
+
+function loop(){ render(); requestAnimationFrame(loop); }
+
+// controls
+function stopPlay(){ playing=false; clearTimeout(timer); document.getElementById('play').textContent='Play'; }
+function tick(){
+  if(!playing) return;
+  if(step>=STEPS.length-1){ stopPlay(); return; }
+  applyStep(step+1,true);
+  timer=setTimeout(tick, STEP_MS[step]);
+}
+document.getElementById('play').onclick=()=>{
+  if(playing){ stopPlay(); return; }
+  if(step>=STEPS.length-1) applyStep(0,false);
+  playing=true; document.getElementById('play').textContent='Pause';
+  timer=setTimeout(tick, 600);
+};
+document.getElementById('next').onclick=()=>{ stopPlay(); applyStep(step+1,true); };
+document.getElementById('back').onclick=()=>{ stopPlay(); applyStep(step-1,false); };
+document.getElementById('restart').onclick=()=>{ stopPlay(); applyStep(0,false); };
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='BUTTON' && (e.key===' '||e.key==='Enter')) return;
+  if(e.key==='ArrowRight'){ stopPlay(); applyStep(step+1,true); }
+  else if(e.key==='ArrowLeft'){ stopPlay(); applyStep(step-1,false); }
+  else if(e.key===' '){ e.preventDefault(); document.getElementById('play').click(); }
+});
+
+// drag to rotate
+const stage=document.getElementById('stage'); let drag=null;
+stage.addEventListener('pointerdown',e=>{ drag={x:e.clientX,y:e.clientY,yaw,pitch}; stage.setPointerCapture(e.pointerId); });
+stage.addEventListener('pointermove',e=>{ if(!drag) return;
+  yaw = drag.yaw + (e.clientX-drag.x)*0.008;
+  pitch = Math.max(-1.2, Math.min(1.35, drag.pitch + (e.clientY-drag.y)*0.008)); });
+['pointerup','pointercancel'].forEach(t=>stage.addEventListener(t,()=>{ drag=null; }));
+
+applyStep(0,false);
+if(REC){ document.querySelector('.controls').style.display='none'; document.querySelector('.hint').style.display='none';
+  window.__rec={applyStep, render, view:(y,p)=>{yaw=y; pitch=p;}, base:{yaw,pitch}, nsteps:STEPS.length}; }
+else { requestAnimationFrame(loop); setTimeout(()=>{ if(!playing && step===0) document.getElementById('play').click(); }, 900); }
+})();
+</script>
+</body>
+</html>
